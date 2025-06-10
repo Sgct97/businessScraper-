@@ -1,0 +1,17 @@
+# Scrapy
+.scrapy/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Output files
+*.csv
+
+# IDE / OS files
+.idea/
+.vscode/
+.DS_Store
+
+# Credentials
+.env 
