@@ -1,0 +1,10 @@
+# For the Yellow Pages scraper in business_scraper/
+-r business_scraper/requirements.txt
+
+# For utility scripts in utils/
+pandas
+openpyxl
+requests-html
+undetected-chromedriver
+selenium
+tabulate 
