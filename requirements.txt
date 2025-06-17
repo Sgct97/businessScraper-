@@ -2,9 +2,9 @@
 -r business_scraper/requirements.txt
 
 # For utility scripts in utils/
-pandas
-openpyxl
+pandas==2.2.2
+openpyxl==3.1.2
 requests-html
-undetected-chromedriver
-selenium
+undetected-chromedriver==3.5.0
+selenium==4.22.0
 tabulate 

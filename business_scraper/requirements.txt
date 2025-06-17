@@ -1,9 +1,0 @@
-requests
-beautifulsoup4
-pandas
-requests-html
-lxml-html-clean
-fake-useragent
-Scrapy
-selenium
-undetected-chromedriver 
