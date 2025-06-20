@@ -8,6 +8,7 @@ from urllib.parse import urljoin, urlparse
 import re
 import time
 import sys
+import os
 
 # --- Configuration ---
 INPUT_FILE = 'final_call_list.csv'
@@ -60,69 +61,76 @@ def get_internal_links(driver, base_url):
 def analyze_website(driver, url):
     """
     Visits a website, finds key internal pages, and scrapes aggregated data.
-    **Now with added support for legacy HTML framesets.**
+    **Now with added support for legacy HTML framesets and footer-first analysis.**
     """
     wait = WebDriverWait(driver, 10)
     full_source = ""
     full_text = ""
     
-    # --- Page Loading and Content Gathering ---
+    # --- Page Loading and Initial Content Gathering ---
     try:
         print(f" - Navigating to homepage: {url}")
         driver.get(url)
-        time.sleep(1) # Allow for redirects/settling
+        time.sleep(2) # Increased sleep to allow for JS-heavy sites to settle.
 
-        # **FIX 3: Handle websites using Framesets**
-        try:
-            frames = driver.find_elements(By.TAG_NAME, 'frame')
-            if frames:
-                print(f"   - Legacy frameset detected. Analyzing {len(frames)} frames.")
-                for i in range(len(frames)):
-                    try:
-                        driver.switch_to.frame(i)
-                        wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                        full_source += driver.page_source
-                        full_text += driver.find_element(By.TAG_NAME, 'body').text
-                    except (WebDriverException, TimeoutException) as e:
-                        print(f"     - Could not analyze frame {i}. Error: {type(e).__name__}")
-                    finally:
-                        # CRITICAL: Always switch back to the main document
-                        driver.switch_to.default_content()
-            else:
-                # Standard page: wait for body and get content
-                wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                full_source = driver.page_source
-                full_text = driver.find_element(By.TAG_NAME, 'body').text
-        
-        except (WebDriverException, TimeoutException) as e:
-            # Fallback if the body/frame check itself fails
-            print(f" - WARNING: Initial page content analysis failed. Error: {type(e).__name__}")
-            full_source = driver.page_source # Last resort: get what we can
-            
-        if not full_source:
-             print(f" - FATAL: Could not retrieve any content from {url}.")
-             return {'contacts': 'N/A', 'emails': 'N/A', 'tech_stack': 'N/A', 'social_links': 'N/A'}
+        # Handle websites using Framesets first
+        frames = driver.find_elements(By.TAG_NAME, 'frame')
+        if frames:
+            print(f"   - Legacy frameset detected. Analyzing {len(frames)} frames.")
+            for i in range(len(frames)):
+                try:
+                    driver.switch_to.frame(i)
+                    wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                    full_source += driver.page_source
+                    full_text += driver.find_element(By.TAG_NAME, 'body').text
+                except (WebDriverException, TimeoutException) as e:
+                    print(f"     - Could not analyze frame {i}. Error: {type(e).__name__}")
+                finally:
+                    driver.switch_to.default_content()
+        else:
+            # Standard page: wait for body and get content
+            wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+            full_source = driver.page_source
+            full_text = driver.find_element(By.TAG_NAME, 'body').text
 
-        # --- Sub-page analysis ---
-        internal_links_to_visit = get_internal_links(driver, url)
-        print(f" - Found {len(internal_links_to_visit)} key internal pages to analyze.")
-        for link in internal_links_to_visit[:2]: # Limit to 2 pages for efficiency
-            try:
-                print(f" - Analyzing sub-page: {link}")
-                driver.get(link)
-                wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-                full_source += driver.page_source
-                full_text += driver.find_element(By.TAG_NAME, 'body').text
-            except (WebDriverException, TimeoutException) as e:
-                print(f"   - Could not load sub-page {link}. Error: {type(e).__name__}")
-                continue
-                
     except (WebDriverException, TimeoutException) as e:
-        print(f" - FATAL: Could not navigate to {url}. Error: {type(e).__name__}")
+        print(f" - FATAL: Could not load homepage {url}. Error: {type(e).__name__}")
         return {'contacts': 'N/A', 'emails': 'N/A', 'tech_stack': 'N/A', 'social_links': 'N/A'}
 
+    if not full_source:
+         print(f" - FATAL: Could not retrieve any content from {url}.")
+         return {'contacts': 'N/A', 'emails': 'N/A', 'tech_stack': 'N/A', 'social_links': 'N/A'}
+
+    # --- NEW: Footer-First Analysis ---
+    try:
+        footer = driver.find_element(By.TAG_NAME, 'footer')
+        print("   - Found footer. Prioritizing for analysis.")
+        # Add footer content to the top of our text for priority.
+        full_text = footer.text + "\n" + full_text
+        full_source = footer.get_attribute('innerHTML') + "\n" + full_source
+    except Exception:
+        print("   - No explicit <footer> tag found. Analyzing full page content.")
+        pass # It's okay if there's no footer tag, we'll just analyze the whole page.
+
+    # --- Sub-page analysis (now supplemental) ---
+    try:
+        internal_links_to_visit = get_internal_links(driver, url)
+        if internal_links_to_visit:
+            print(f" - Found {len(internal_links_to_visit)} key internal pages to supplement analysis.")
+            for link in internal_links_to_visit[:2]: # Limit to 2 pages for efficiency
+                try:
+                    print(f"   - Analyzing sub-page: {link}")
+                    driver.get(link)
+                    wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                    full_source += driver.page_source
+                    full_text += driver.find_element(By.TAG_NAME, 'body').text
+                except (WebDriverException, TimeoutException) as e:
+                    print(f"     - Could not load sub-page {link}. Error: {type(e).__name__}")
+                    continue
+    except Exception as e:
+        print(f"   - Error during sub-page analysis: {type(e).__name__}")
+
     # --- Analysis on Aggregated Data ---
-    
     emails = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', full_source)
     unique_emails = sorted(list(set(e.lower() for e in emails)))
 
@@ -166,40 +174,73 @@ def analyze_website(driver, url):
     }
 
 def main():
-    try:
-        df = pd.read_csv(INPUT_FILE)
-    except FileNotFoundError:
-        print(f"Error: Input file '{INPUT_FILE}' not found. Please ensure it exists.")
+    # --- Intelligent Processing: Only target records missing emails from the output file ---
+    if not os.path.exists(OUTPUT_FILE):
+        print(f"Error: Output file '{OUTPUT_FILE}' not found. This file is required to run the script in its current mode.")
+        print("Please run with an existing enriched file or modify the script to start from scratch.")
         sys.exit(1)
+
+    print(f"--- Loading existing data from '{OUTPUT_FILE}' ---")
+    try:
+        df_master = pd.read_csv(OUTPUT_FILE)
+    except Exception as e:
+        print(f"Error reading '{OUTPUT_FILE}': {e}")
+        sys.exit(1)
+
+    # Ensure 'emails' column exists and fill any actual NaN values with a placeholder for consistent string checks
+    if 'emails' not in df_master.columns:
+        df_master['emails'] = 'N/A'
+    df_master['emails'] = df_master['emails'].fillna('N/A')
+
+    # Define what is considered an "empty" email entry
+    is_placeholder = df_master['emails'].str.strip().str.upper() == 'N/A'
+    is_empty_string = df_master['emails'].str.strip() == ''
+    
+    df_to_process = df_master[is_placeholder | is_empty_string].copy()
+
+    if df_to_process.empty:
+        print("--- No records with missing emails found. Enrichment is complete. ---")
+        return
+
+    print(f"--- Found {len(df_to_process)} records with missing emails to process. ---")
 
     if TEST_MODE:
         print(f"--- RUNNING IN TEST MODE: Processing first {TEST_LIMIT} records ---")
-        df = df.head(TEST_LIMIT)
+        df_to_process = df_to_process.head(TEST_LIMIT)
+        if df_to_process.empty:
+            print("--- No records to process in test mode. ---")
+            return
 
     driver = setup_driver()
     
-    results = []
-    for index, row in df.iterrows():
-        print(f"\nProcessing ({index + 1}/{len(df)}): {row['name']}")
+    # --- Main Processing Loop with In-place Update ---
+    for index, row in df_to_process.iterrows():
+        # Use .get() for safer access in case a column is missing
+        print(f"\nProcessing record for: {row.get('name', 'N/A')} (Index: {index})")
         website_url = row.get('website')
 
-        if pd.notna(website_url) and website_url.startswith('http'):
+        if pd.notna(website_url) and isinstance(website_url, str) and website_url.startswith('http'):
             analysis_data = analyze_website(driver, website_url)
         else:
-            print(f" - Skipping due to invalid or missing website URL.")
+            print(f" - Skipping due to invalid or missing website URL: '{website_url}'")
             analysis_data = {'contacts': 'N/A', 'emails': 'N/A', 'tech_stack': 'N/A', 'social_links': 'N/A'}
         
-        results.append(analysis_data)
+        # Update the master DataFrame in memory
+        for col, value in analysis_data.items():
+            df_master.loc[index, col] = value
         
+        # Save the entire updated DataFrame back to the CSV.
+        # This is a safe way to do incremental, in-place updates.
+        try:
+            df_master.to_csv(OUTPUT_FILE, index=False)
+            print(f"   - Successfully updated and saved record {index}.")
+        except Exception as e:
+            print(f"   - CRITICAL: Could not save progress for record {index}. Error: {e}")
+            
     driver.quit()
 
-    results_df = pd.DataFrame(results, index=df.index)
-    df_enriched = df.copy()
-    for col in results_df.columns:
-        df_enriched[col] = results_df[col]
-        
-    df_enriched.to_csv(OUTPUT_FILE, index=False)
-    print(f"\nEnrichment complete. Saved results to '{OUTPUT_FILE}'")
+    print(f"\nEnrichment complete. All targeted records have been processed and saved to '{OUTPUT_FILE}'")
+
 
 if __name__ == "__main__":
     main() 
